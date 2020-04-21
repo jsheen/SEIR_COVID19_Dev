@@ -60,10 +60,9 @@ nyt_daily <- get_daily_incidence(db=nyt_confirmed)
 nyt_daily$exp <- exp(0.4 * seq(1:nrow(nyt_daily))) # simple exp. example -------
 
 # Plot r(t) for cumulative, daily, deceased data (fit by state) ----------------
-plot_r_t <- function(db, type, start, window) {
-  # Hawaii and Wyoming manual removal from "deceased" plot (since there are none yet)
+plot_r_t <- function(db, type, start, window, begin_type) {
+  # Wyoming manual removal from "deceased" plot (since there are none yet)
   if (type == "deceased") {
-    db$Hawaii <- NULL
     db$Wyoming <- NULL
   }
   # Remove Virgin Islands and Northern Mariana Islands -------------------------
@@ -74,17 +73,44 @@ plot_r_t <- function(db, type, start, window) {
   pdf(file=paste0("~/SEIR_COVID19_Dev/COVID19seir/get_t_depend_r_exp/plots/", 
                   type,
                   "_start_", start, 
-                  "_window_", window, ".pdf"),width=8, height=16)
+                  "_window_", window, 
+                  "_begin_type_", begin_type, ".pdf"),width=8, height=16)
   par(mfrow=c(6,3))
   
   # Loop through each state and solve for instantaneous growth rate ------------
   states <- colnames(db)[1:(ncol(db) - 1)]
   for (state in states) {
     # Define beginning of time series ------------------------------------------
-    first_occ_nonzero <- min(which(db[,state] != 0)) # 1st occur of nonzero elem
-    t <- db[(max(1, (first_occ_nonzero - 1)):nrow(db)), state]
+    first_occ_start <- min(which(db[,state] >= start))
+    t <- db[(max(1, (first_occ_start - 1)):nrow(db)), state]
     t <- as.numeric(t)
-    t <- t[min(which(t >= start)):length(t)]
+    
+    # Redefine beginning of time series ----------------------------------------
+    omission_len <- 0
+    omission_sum <- 0
+    if (begin_type == 1) { 
+      # First time point after which, 3 consecutive days of cases reported -----
+      for (t_dex in 4:length(t)) {
+        if (t[t_dex] > 0 & t[t_dex - 1] > 0 & t[t_dex - 2] > 0) {
+          t_new <- t[(t_dex - 4):length(t)]
+          omission_len <- length(t) - length(t_new)
+          omission_sum <- ifelse((t_dex - 5) > 0, sum(t[1:(t_dex - 5)]), 0)
+          t <- t_new
+          break
+        }
+      }
+    } else if (begin_type == 2) { 
+      # First time point after which, never more than 2 days without cases -----
+      for (t_dex in 1:length(t)) {
+        if (length(which((t[(t_dex + 1):length(t)]) == 0)) < 3) {
+          t_new <- t[t_dex:length(t)]
+          omission_len <- length(t) - length(t_new)
+          omission_sum <- ifelse((t_dex - 1) > 0, sum(t[1:(t_dex - 1)]), 0)
+          t <- t_new
+          break
+        }
+      }
+    }
     
     # Solve for r(t) using intercept (red line) --------------------------------
     rs <- list()
@@ -147,6 +173,46 @@ plot_r_t <- function(db, type, start, window) {
     best_intercept <- lm_res$coefficients[1]
     abline(h=best_r, col="blue")
     
+    # Smooth using the loess eq. and find the point-wise slope (purple line) ---
+    # Note: we use the exp_fit data frame created in the above section ---------
+    # Note: code for pointwise slope estimates taken from: https://stats.stackexchange.com/questions/264231/could-the-equation-of-the-curve-provided-by-loess-be-obtained
+    lo_res <- loess(ys ~ xs, data=exp_fit)
+    lo_pred <-  predict(lo_res, exp_fit$xs)
+    nn <- length(lo_pred)
+    sl <- diff(lo_pred, lag=2) / (exp_fit$xs[3] - exp_fit$xs[1])
+    lines(sl ~ exp_fit$xs[2:(nn - 1)], col="purple")
+    
+    # Fit a third degree polynomial to the entire t-series (orange line) -------
+    poly_fit <- data.frame(cbind(1:length(t), log(t)))
+    colnames(poly_fit) <- c("xs", "ys")
+    poly_fit$ys <- ifelse(is.infinite(poly_fit$ys), 0, poly_fit$ys) # infinity correction
+    poly_res <- lm(ys ~ poly(xs, 3, raw=T), data=poly_fit)
+    poly_intercept <- unname(summary(poly_res)$coefficients[,1][1])
+    poly_r1 <- unname(summary(poly_res)$coefficients[,1][2])
+    if (unname(summary(poly_res)$coefficients[,4][3]) < 0.05) {
+      poly_r2 <- unname(summary(poly_res)$coefficients[,1][3])
+    } else {
+      poly_r2 <- NA
+    }
+    if (unname(summary(poly_res)$coefficients[,4][4]) < 0.05) {
+      poly_r3 <- unname(summary(poly_res)$coefficients[,1][4])
+    } else {
+      poly_r3 <- NA
+    }
+    
+    # Get r(t) based on significance of higher order terms ---------------------
+    rs_poly <- NA
+    if (is.na(poly_r3) & is.na(poly_r2)) {
+      rs_poly <- sapply(1:length(t), function(x) poly_r1)
+    } else if (is.na(poly_r3) & !is.na(poly_r2)) {
+      rs_poly <- sapply(1:length(t), function(x) poly_r1 + poly_r2 * x)
+    } else if (!is.na(poly_r3) & is.na(poly_r2)) {
+      rs_poly <- sapply(1:length(t), function(x) poly_r1 + poly_r3 * x ^ 2)
+    } else if (is.na(poly_r3) & is.na(poly_r2)) {
+      rs_poly <- sapply(1:length(t), function(x) poly_r1 + poly_r2 * x + poly_r3 * x ^ 2)
+    }
+    lines(rs_poly, col="orange")
+    
     # Plot the time-dependent-r exp. fit on log scale (middle panel) -----------
     ys <- vector()
     ys2 <- vector()
@@ -160,10 +226,13 @@ plot_r_t <- function(db, type, start, window) {
     ys2 <- c(rep(NA, window), ys2, rep(NA, window))
     ys3 <- c(rep(NA, window), ys3, rep(NA, window))
     plot(log(t), main=state, ylab=paste0("log(# ", type," cases)"), 
-         xlab="t (days)", ylim=c(0, 10), pch=10, cex=0.5)
+         xlab="t (days)", ylim=c(0, 12), pch=10, cex=0.5)
     lines(intercepts + log(ys), col="red")
     lines(best_intercept + log(ys2), col="blue")
     lines(log(ys3), col="green")
+    lines(fitted(poly_res), col="orange")
+    lines(lo_pred, col="purple")
+    text(x=0, y=10, labels=paste0("omis. len: ", omission_len, "\nomis. sum: ", omission_sum), pos=4)
     
     # Plot the time-dependent-r exp. fit on linear scale (right panel) ---------
     ys <- vector()
@@ -181,11 +250,16 @@ plot_r_t <- function(db, type, start, window) {
     lines(exp(intercepts + ys), col="red")
     lines(exp(best_intercept + ys2), col="blue")
     lines(exp(ys3), col="green")
+    lines(exp(fitted(poly_res)), col="orange")
+    lines(exp(lo_pred), col="purple")
   }
   dev.off()
 }
-plot_r_t(db=nyt_confirmed, type="confirmed", start=1, window=1)
-plot_r_t(db=nyt_daily, type="daily", start=1, window=1)
-plot_r_t(db=nyt_deceased, type="deceased", start=1, window=1)
+plot_r_t(db=nyt_confirmed, type="confirmed", start=1, window=2, begin_type=1)
+plot_r_t(db=nyt_daily, type="daily", start=1, window=2, begin_type=1)
+plot_r_t(db=nyt_deceased, type="deceased", start=1, window=2, begin_type=1)
+plot_r_t(db=nyt_confirmed, type="confirmed", start=1, window=2, begin_type=2)
+plot_r_t(db=nyt_daily, type="daily", start=1, window=2, begin_type=2)
+plot_r_t(db=nyt_deceased, type="deceased", start=1, window=2, begin_type=2)
 
 
