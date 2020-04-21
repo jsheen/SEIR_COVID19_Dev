@@ -255,6 +255,12 @@ plot_r_t <- function(db, type, start, window, begin_type) {
   }
   dev.off()
 }
+plot_r_t(db=nyt_confirmed, type="confirmed", start=1, window=1, begin_type=1)
+plot_r_t(db=nyt_daily, type="daily", start=1, window=1, begin_type=1)
+plot_r_t(db=nyt_deceased, type="deceased", start=1, window=1, begin_type=1)
+plot_r_t(db=nyt_confirmed, type="confirmed", start=1, window=1, begin_type=2)
+plot_r_t(db=nyt_daily, type="daily", start=1, window=1, begin_type=2)
+plot_r_t(db=nyt_deceased, type="deceased", start=1, window=1, begin_type=2)
 plot_r_t(db=nyt_confirmed, type="confirmed", start=1, window=2, begin_type=1)
 plot_r_t(db=nyt_daily, type="daily", start=1, window=2, begin_type=1)
 plot_r_t(db=nyt_deceased, type="deceased", start=1, window=2, begin_type=1)
